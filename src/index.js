@@ -14,51 +14,29 @@ addEventListener('fetch', event => {
 async function handleRequest(request) {
   try {
     const url = new URL(request.url);
-    setLanguage(request.headers.get('accept-language')?.split(',')[0]);
+    const lang = url.searchParams.get('lang');
+    setLanguage(lang || request.headers.get('accept-language')?.split(',')[0]);
     if (request.method === 'GET' && url.pathname === '/') {
       // Return the HTML form for GET requests
       return new Response(generateHtml('', '', '', '', url.origin), {
-        headers: { 'Content-Type': 'text/html' }
-      });
-    } else if (request.method === 'POST' && url.pathname === '/') {
-      const formData = await request.formData();
-      const inputString = formData.get('input');
-      const selectedRules = formData.getAll('selectedRules');
-      const customRuleDomains = formData.getAll('customRuleSite[]');
-      const customRuleIPs = formData.getAll('customRuleIP[]');
-      const customRuleNames = formData.getAll('customRuleName[]');
-      const customRules = customRuleDomains.map((domains, index) => ({
-        sites: domains.split(',').map(site => site.trim()),
-        ips: customRuleIPs[index].split(',').map(ip => ip.trim()),
-        outbound: customRuleNames[index]
-      }));
-
-      if (!inputString) {
-        return new Response(t('missingInput'), { status: 400 });
-      }
-
-      // If no rules are selected, use the default rules
-      const rulesToUse = selectedRules.length > 0 ? selectedRules : getDefaultRules();
-
-      const xrayUrl = `${url.origin}/xray?config=${encodeURIComponent(inputString)}`;
-      const singboxUrl = `${url.origin}/singbox?config=${encodeURIComponent(inputString)}&selectedRules=${encodeURIComponent(JSON.stringify(rulesToUse))}&customRules=${encodeURIComponent(JSON.stringify(customRules))}`;
-      const clashUrl = `${url.origin}/clash?config=${encodeURIComponent(inputString)}&selectedRules=${encodeURIComponent(JSON.stringify(rulesToUse))}&customRules=${encodeURIComponent(JSON.stringify(customRules))}`;
-      const surgeUrl = `${url.origin}/surge?config=${encodeURIComponent(inputString)}&selectedRules=${encodeURIComponent(JSON.stringify(rulesToUse))}&customRules=${encodeURIComponent(JSON.stringify(customRules))}`;
-
-
-      return new Response(generateHtml(xrayUrl, singboxUrl, clashUrl, surgeUrl), {
         headers: { 'Content-Type': 'text/html' }
       });
     } else if (url.pathname.startsWith('/singbox') || url.pathname.startsWith('/clash') || url.pathname.startsWith('/surge')) {
       const inputString = url.searchParams.get('config');
       let selectedRules = url.searchParams.get('selectedRules');
       let customRules = url.searchParams.get('customRules');
+      // 获取语言参数，如果为空则使用默认值
+      let lang = url.searchParams.get('lang') || 'zh-CN';
+      // Get custom UserAgent
+      let userAgent = url.searchParams.get('ua');
+      if (!userAgent) {
+        userAgent = 'curl/7.74.0';
+      }
 
       if (!inputString) {
         return new Response(t('missingConfig'), { status: 400 });
       }
 
-      // Deal with predefined rules
       if (PREDEFINED_RULE_SETS[selectedRules]) {
         selectedRules = PREDEFINED_RULE_SETS[selectedRules];
       } else {
@@ -90,11 +68,11 @@ async function handleRequest(request) {
 
       let configBuilder;
       if (url.pathname.startsWith('/singbox')) {
-        configBuilder = new SingboxConfigBuilder(inputString, selectedRules, customRules, baseConfig);
+        configBuilder = new SingboxConfigBuilder(inputString, selectedRules, customRules, baseConfig, lang, userAgent);
       } else if (url.pathname.startsWith('/clash')) {
-        configBuilder = new ClashConfigBuilder(inputString, selectedRules, customRules, baseConfig);
+        configBuilder = new ClashConfigBuilder(inputString, selectedRules, customRules, baseConfig, lang, userAgent);
       } else {
-        configBuilder = new SurgeConfigBuilder(inputString, selectedRules, customRules, baseConfig)
+        configBuilder = new SurgeConfigBuilder(inputString, selectedRules, customRules, baseConfig, lang, userAgent)
           .setSubscriptionUrl(url.href);
       }
 
@@ -181,11 +159,22 @@ async function handleRequest(request) {
       const proxylist = inputString.split('\n');
 
       const finalProxyList = [];
+      // Use custom UserAgent (for Xray) Hmmm...
+      let userAgent = url.searchParams.get('ua');
+      if (!userAgent) {
+        userAgent = 'curl/7.74.0';
+      }
+      let headers = new Headers({
+        "User-Agent"   : userAgent
+      });
 
       for (const proxy of proxylist) {
         if (proxy.startsWith('http://') || proxy.startsWith('https://')) {
           try {
-            const response = await fetch(proxy)
+            const response = await fetch(proxy, {
+              method : 'GET',
+              headers : headers
+            })
             const text = await response.text();
             let decodedText;
             decodedText = decodeBase64(text.trim());
